@@ -1,8 +1,8 @@
 # process-text
 
-Shorten or simplify a Markdown or text file. Use `-technical` for ASD-STE100 English. Use `-caveman` for fewer tokens.
+Shorten or simplify a markdown or text file. Use `-technical` for simplified technical English. Use `-caveman` short word use.
 
-The tool is offline. It makes no network calls, starts no other programs, and never uses an LLM or an API key. It applies fixed rules and leaves sentence-level rewriting to you, or to the agent that runs it.
+The tool is completely offline. It applies fixed rules and leaves sentence-level rewriting to you.
 
 Use Python 3.9 or newer. The tool accepts `.md` and `.txt` files only.
 
@@ -12,7 +12,7 @@ Use Python 3.9 or newer. The tool accepts `.md` and `.txt` files only.
 python3 skills/process-text/scripts/process --install
 ```
 
-If the shell cannot find `process`, add `~/.local/bin` to `PATH`.
+Add `~/.local/bin` to `PATH` if a shell cannot find `process`.
 
 ## Run
 
