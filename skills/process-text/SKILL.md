@@ -54,6 +54,17 @@ Invocation by the user looks like `/process-text README.md -caveman` or `/proces
 | `full` | Also a, an, the. Fragments are fine. |
 | `ultra` | Also uses abbreviations (config, DB, env, docs) and `~`. By hand, add arrows for cause and flow. |
 
+## Recipe: shrink a README to setup and usage
+
+Trigger phrase that works: `/process-text README.md -technical`, then cut to setup and usage only.
+
+1. The scripts only reword; they never decide what to delete. Cut sections by hand first: features, background, troubleshooting, build/release steps, long protocol notes. Keep install, run examples, one options table, one keys table.
+2. Keep the license section as two lines linking to the license file. Do not drop it unless the user says so.
+3. Write the short draft, then run the Technical steps (`ste.py check`, `proc.py -technical`, `verify.py`) on it. A draft written in short, active sentences usually shows 0 findings.
+4. Save the original first (`cp README.md ../README.full.bak`). Write to README.md only if the user asks for that; otherwise leave `updated-README.md`.
+5. Skip `-caveman` for human-read docs: it drops articles and reads oddly.
+6. Check every flag and command in the new text against the code or `--help`; `verify.py` cannot do this.
+
 ## Pitfalls
 
 - Never overwrite the user's original unless they ask. The default output is `updated-FILE`. `--in-place` updates the original and keeps `FILE.bak`; use it only on request.
