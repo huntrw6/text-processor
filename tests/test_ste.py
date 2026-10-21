@@ -1,6 +1,5 @@
 """Tests for ste.py. Run: python3 -m unittest -v test_ste"""
-import io, json, os, re, sys, tempfile, threading, unittest, contextlib
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import io, json, os, re, sys, tempfile, unittest, contextlib
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "process-text", "scripts"))
@@ -192,35 +191,18 @@ class Dictionary(unittest.TestCase):
         dic = ste.Dictionary({"approved": [], "non_approved": {"click": {"pos": "v", "alts": ["CLICK (n)"]}}})
         self.assertEqual(ste.lint_text("Click the button.", ste.Config(), dic), [])
 
-    @unittest.skipUnless(os.environ.get("STE_PDF") and os.path.exists(os.environ["STE_PDF"]), "set STE_PDF to the standard's PDF")
-    def test_real_pdf(self):
-        d = ste.build_dictionary_from_pdf(os.environ["STE_PDF"])
+    @unittest.skipUnless(os.environ.get("STE_TXT") and os.path.exists(os.environ["STE_TXT"]), "set STE_TXT to the standard's text (pdftotext -layout)")
+    def test_real_text(self):
+        d = ste.build_dictionary_from_file(os.environ["STE_TXT"])
         self.assertGreater(len(d["non_approved"]), 1000)
         self.assertEqual(d["non_approved"]["utilize"]["alts"], ["USE (v)"])
 
 
-class Rewrite(unittest.TestCase):
-    def llm_factory(self, fn):
-        return lambda system, user: "<rewrite>" + fn(re.search(r"<original>\n(.*?)\n</original>", user, re.S).group(1)) + "</rewrite>"
-
+class Protected(unittest.TestCase):
     def test_placeholders_round_trip(self):
         t, store = ste.protect("Run `a b` and see [docs](http://x.y/z) or http://q.r.")
         self.assertNotIn("`", t)
         self.assertEqual(ste.unprotect(t, store), "Run `a b` and see [docs](http://x.y/z) or http://q.r.")
-
-    def test_accepts_improvement_and_rejects_bad_replies(self):
-        text = "The server was configured by the administrator for `prod`.\n"
-        b = ste.parse_markdown(text)[0]
-        fs = ste.analyze_block(b, CFG)
-        good = self.llm_factory(lambda o: "The administrator configured the server for ⟦0⟧.")
-        new, why = ste.rewrite_block(b, fs, CFG, None, good)
-        self.assertEqual(new, "The administrator configured the server for `prod`.")
-        lost = self.llm_factory(lambda o: "The administrator configured the server.")
-        self.assertIsNone(ste.rewrite_block(b, fs, CFG, None, lost)[0])
-        worse = self.llm_factory(lambda o: o + " It's done; it's fine.")
-        self.assertIsNone(ste.rewrite_block(b, fs, CFG, None, worse)[0])
-        structure = self.llm_factory(lambda o: "- " + o)
-        self.assertIsNone(ste.rewrite_block(b, fs, CFG, None, structure)[0])
 
     def test_wrapping_never_starts_a_line_like_markdown_structure(self):
         text = "aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx\nyyy zzz\n"
@@ -230,42 +212,19 @@ class Rewrite(unittest.TestCase):
         for line in rep.split("\n")[1:]:
             self.assertFalse(re.match(r"([-*+>#]|\d+[.)])(\s|$)", line), line)
 
-    def test_rewrite_text_keeps_markdown_structure(self):
-        text = "# Title\n\n1. The file was moved by the script.\n2. Run `go`.\n\n> It was written by the team\n> and then it was sent by the bot.\n"
-        llm = self.llm_factory(lambda o: o.replace("The file was moved by the script.", "The script moved the file.")
-                               .replace("It was written by the team and then it was sent by the bot.", "The team wrote it. The bot sent it."))
-        new, st = ste.rewrite_text(text, CFG, None, llm, "warning", 1, False)
-        self.assertEqual(new, "# Title\n\n1. The script moved the file.\n2. Run `go`.\n\n> The team wrote it. The bot sent it.\n")
-        self.assertEqual(st["rewritten"], 2)
+
+class Offline(unittest.TestCase):
+    """The tool must stay offline and self-contained."""
+    def test_no_network_process_or_env_use(self):
+        scripts = Path(__file__).resolve().parent.parent / "skills" / "process-text" / "scripts"
+        banned = ("import subprocess", "import urllib", "import socket", "import http", "ANTHROPIC", "os.system", "os.popen", ".bashrc", ".zshrc")
+        for f in sorted(scripts.iterdir()):
+            if f.suffix in (".py", "") and f.is_file():
+                text = f.read_text(encoding="utf-8")
+                for word in banned:
+                    self.assertNotIn(word, text, f"{f.name} contains {word!r}")
 
 
-class ApiPath(unittest.TestCase):
-    def test_anthropic_request(self):
-        seen = {}
-
-        class H(BaseHTTPRequestHandler):
-            def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers["content-length"])))
-                seen.update(path=self.path, key=self.headers["x-api-key"], ver=self.headers["anthropic-version"], body=body)
-                data = json.dumps({"content": [{"type": "text", "text": "<rewrite>ok</rewrite>"}]}).encode()
-                self.send_response(200)
-                self.send_header("content-length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-
-            def log_message(self, *a):
-                pass
-
-        srv = HTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        try:
-            out = ste.call_anthropic("sys", "usr", "model-x", "k", f"http://127.0.0.1:{srv.server_address[1]}")
-        finally:
-            srv.shutdown()
-        self.assertEqual(out, "<rewrite>ok</rewrite>")
-        self.assertEqual((seen["path"], seen["key"], seen["ver"]), ("/v1/messages", "k", "2023-06-01"))
-        self.assertEqual(seen["body"]["messages"], [{"role": "user", "content": "usr"}])
-        self.assertEqual(seen["body"]["system"], "sys")
 
 
 class Cli(unittest.TestCase):

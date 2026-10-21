@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""ste - check and rewrite Markdown files toward ASD-STE100 Simplified Technical English (Issue 9).
+"""ste - check and fix Markdown files toward ASD-STE100 Simplified Technical English (Issue 9).
 
 Commands
-    ste process IN [OUT]       Fix and rewrite one file. Writes updated-IN (or OUT); --in-place updates IN.
+    ste process IN [OUT]       Apply the safe fixes to one file. Writes updated-IN (or OUT); --in-place updates IN.
     ste check   [paths]        Report problems (exit 1 when findings reach --fail-on).
     ste fix     [paths]        Apply safe, mechanical fixes (dry run unless --write).
-    ste rewrite [paths]        Fix, then ask an LLM to rewrite the remaining problem
-                               paragraphs (dry run unless --write).
-    ste dict build PDF         Build a local word list from your copy of the standard.
+    ste dict build TXT         Build a local word list from the text of your copy of the standard.
     ste rules                  List the rules this tool checks.
 
-Standard library only. Python 3.9+.
+Offline and self-contained: standard library only, Python 3.9+. It makes no network calls, starts no other
+programs, and reads no environment variables. The sentence-level rewriting is left to the agent or person who
+reads the findings from 'ste check'.
 
 The checks are deterministic heuristics (regular expressions, no part-of-speech tagger).
 They find likely problems; they do not prove compliance.
@@ -19,20 +19,13 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import concurrent.futures as cf
 import difflib
 import fnmatch
 import json
 import os
 import re
-import shlex
-import shutil
-import subprocess
 import sys
 import textwrap
-import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -322,7 +315,7 @@ def mask(text: str) -> str:
 
 
 ABBREV = {"e.g", "i.e", "vs", "cf", "viz", "al", "approx", "no", "fig", "dr", "mr", "mrs", "ms", "inc", "ltd", "st", "jr", "sr"}
-SENT_END_RE = re.compile(r"[.!?]+[\"')\]\u201d\u2019]*(?=\s+[\"\u201c(\[\x01A-Z])")
+SENT_END_RE = re.compile(r"[.!?]+[\"')\]”’]*(?=\s+[\"“(\[\x01A-Z])")
 
 
 def split_sentences(s: str) -> list:
@@ -351,13 +344,13 @@ def split_sentences(s: str) -> list:
 
 
 _UNIT = (
-    r"(?:%|\u00b0[CF]?|[kKMGT]?i?B|[kMG]?Hz|[kMG]?bps|[mkun\u03bc]?(?:s|g|V|W)|[mk\u03bc]A|[mn\u03bc]F|[m\u03bc]H|px|pt|rem|em|min|sec|kg|lbs?|ft|mph|rpm|dB|Nm"
+    r"(?:%|°[CF]?|[kKMGT]?i?B|[kMG]?Hz|[kMG]?bps|[mkunμ]?(?:s|g|V|W)|[mkμ]A|[mnμ]F|[mμ]H|px|pt|rem|em|min|sec|kg|lbs?|ft|mph|rpm|dB|Nm"
     r"|seconds?|minutes?|hours?|days?|milliseconds?|bytes?|kilobytes?|megabytes?|gigabytes?|terabytes?|percent|pixels?|degrees|ohms?|volts?|watts?"
     r"|meters?|millimeters?|kilograms?|pounds?|inches|feet)"
 )
 TOKEN_RE = re.compile(
     r"\([^()]*\)"                                   # text in parentheses = 1 word (8.5)
-    r"|\u201c[^\u201d]*\u201d|\"[^\"]*\""           # quoted text = 1 word (8.6.5)
+    r"|“[^”]*”|\"[^\"]*\""           # quoted text = 1 word (8.6.5)
     r"|\x01+"                                       # code or URL = 1 word
     r"|\bNo\.\s?\d+\b|\d{1,2}(?::\d\d)?\s?[ap]\.m\."  # "No. 1" and "10 a.m." = 1 word (8.6.3, 8.6.4)
     r"|\d[\d.,]*(?:[ ]?" + _UNIT + r"(?![A-Za-z]))"  # number with unit = 1 word (8.6.2)
@@ -412,7 +405,7 @@ PASSIVE_RE = re.compile(
 )
 
 CONTRACTION_RE = re.compile(
-    r"\b(?:[A-Za-z]+n[\u2019']t|[A-Za-z]+[\u2019'](?:ll|re|ve|d|m)|(?:it|that|there|here|what|who|he|she|let|how|where|when|why)[\u2019']s)\b",
+    r"\b(?:[A-Za-z]+n[’']t|[A-Za-z]+[’'](?:ll|re|ve|d|m)|(?:it|that|there|here|what|who|he|she|let|how|where|when|why)[’']s)\b",
     re.I,
 )
 CONTRACTION_MAP = {
@@ -493,7 +486,7 @@ COMPUTER_VERBS = set(
 
 
 def parse_dictionary(text: str) -> dict:
-    """Parse the word list from the text of ASD-STE100 (pdftotext -layout output)."""
+    """Parse the word list from the text of ASD-STE100 (the output of pdftotext -layout)."""
     lines = text.split("\n")
     start = None
     for i, l in enumerate(lines):
@@ -505,8 +498,8 @@ def parse_dictionary(text: str) -> dict:
         r"Part 2 - Dictionary|^\s*Issue \d|ASD[- ]STE100 Simplified|^\s*20\d\d-\d\d-\d\d\s*$|Blank Page|^Word\s+Approved|^\(part of speech\)\s+ALTERNATIVES"
     )
     head_re = re.compile(r"^ {0,2}(\S.*?)\s+\((" + POS + r")\)[,]?(?:\s{2,}(\S.*))?\s*$")
-    wrap_re = re.compile(r"^ {0,2}([A-Za-z][A-Za-z'\u2019 /\-]*?)\s{2,}(\S.*)$")
-    alt_re = re.compile(r"^\s{8,34}([A-Z][A-Z0-9'\u2019/\-]*(?: [A-Z0-9'\u2019/\-]+)*(?: \((?:" + POS + r"|TN|TV)\))?)(?:\s{2,}|$)")
+    wrap_re = re.compile(r"^ {0,2}([A-Za-z][A-Za-z'’ /\-]*?)\s{2,}(\S.*)$")
+    alt_re = re.compile(r"^\s{8,34}([A-Z][A-Z0-9'’/\-]*(?: [A-Z0-9'’/\-]+)*(?: \((?:" + POS + r"|TN|TV)\))?)(?:\s{2,}|$)")
     non: dict = {}
     approved: set = set()
     cur = None
@@ -551,19 +544,14 @@ def parse_dictionary(text: str) -> dict:
     return {"issue": "9", "approved": sorted(approved), "non_approved": non}
 
 
-def build_dictionary_from_pdf(pdf: str) -> dict:
-    if pdf.lower().endswith(".txt"):
-        text = Path(pdf).read_text(encoding="utf-8")
-    else:
-        try:
-            r = subprocess.run(["pdftotext", "-layout", pdf, "-"], capture_output=True, text=True, check=True)
-        except FileNotFoundError:
-            raise SystemExit("ste: 'pdftotext' not found. Install poppler-utils, or pass a .txt file made with: pdftotext -layout file.pdf out.txt")
-        except subprocess.CalledProcessError as e:
-            raise SystemExit(f"ste: pdftotext failed: {e.stderr.strip()}")
-        text = r.stdout
+def build_dictionary_from_file(path: str) -> dict:
+    """Build the word list from the text of ASD-STE100. This tool never runs other programs,
+    so convert the PDF yourself first: pdftotext -layout ASD-STE100_ISSUE9.pdf ASD-STE100_ISSUE9.txt"""
+    if not path.lower().endswith(".txt"):
+        raise SystemExit("ste: give a .txt file. Convert the PDF first with: pdftotext -layout ASD-STE100_ISSUE9.pdf ASD-STE100_ISSUE9.txt")
+    text = Path(path).read_text(encoding="utf-8")
     data = parse_dictionary(text)
-    data["source"] = Path(pdf).name
+    data["source"] = Path(path).name
     return data
 
 
@@ -645,11 +633,11 @@ def is_imperative(sent: str) -> bool:
     t = LEAD_ADVERB_RE.sub("", t)
     t = COND_LEAD_RE.sub("", t, count=1)
     t = LEAD_ADVERB_RE.sub("", t)
-    toks = re.findall(r"[A-Za-z'\u2019]+", t[:90])
+    toks = re.findall(r"[A-Za-z'’]+", t[:90])
     if not toks:
         return False
     w = toks[0].lower()
-    if w in ("don't", "don\u2019t"):
+    if w in ("don't", "don’t"):
         return True
     if w == "do" and len(toks) > 1 and toks[1].lower() == "not":
         return True
@@ -724,7 +712,7 @@ def _analyze_sentence(sent: str, base: int, block: Block, cfg: Config, dic: Opti
     # 4.2 contractions
     for m in CONTRACTION_RE.finditer(sent):
         orig = m.group(0)
-        key = orig.lower().replace("\u2019", "'")
+        key = orig.lower().replace("’", "'")
         full = CONTRACTION_MAP.get(key, "MISSING")
         if full == "MISSING":
             if key.endswith("n't"):
@@ -797,7 +785,7 @@ def _analyze_sentence(sent: str, base: int, block: Block, cfg: Config, dic: Opti
         reported.add(m.start())
         add("1.2", "warning", f"'{w}' is not an approved verb. Use {MODAL_ADVICE[w.lower()]}.", m.start(), m.end())
     if dic is not None and on("1.2"):
-        toks = [(t.start(), t.end(), t.group(0).lower().replace("\u2019", "'")) for t in re.finditer(r"[A-Za-z][A-Za-z'\u2019\-]*", sent)]
+        toks = [(t.start(), t.end(), t.group(0).lower().replace("’", "'")) for t in re.finditer(r"[A-Za-z][A-Za-z'’\-]*", sent)]
         i = 0
         while i < len(toks):
             hit = None
@@ -938,34 +926,8 @@ def apply_safe_fixes(text: str, cfg: Config, dic: Optional[Dictionary]) -> tuple
 
 
 # --------------------------------------------------------------------------------------
-# LLM rewrite
+# Protected spans (code, links, URLs stay unchanged)
 # --------------------------------------------------------------------------------------
-
-SYSTEM_PROMPT = """You edit technical documentation so that it follows ASD-STE100 Simplified Technical English (Issue 9).
-
-Rules to apply to the text you receive:
-- Procedural sentences (instructions): maximum 20 words. Descriptive sentences: maximum 25 words.
-- Write one instruction in each sentence, unless two actions occur at the same time.
-- Write instructions in the imperative form. Put a condition first, then a comma, then the command.
-- Use the active voice. Use the passive voice only in descriptive text when the agent is unknown.
-- Use only these verb forms: infinitive, imperative, simple present, simple past, simple future (will), and the past participle as an adjective.
-  Do not use perfect or progressive tenses. Do not use -ing forms, except in technical nouns.
-- Use the verbs MUST for a requirement and CAN for a possibility. Do not use should, may, might, would, could, or shall.
-- Do not use contractions, semicolons, or Latin abbreviations (e.g., i.e., etc.).
-- Do not omit articles or other words to make a sentence shorter.
-- Use short, common words. Use one word for one meaning, and use the same term for the same thing each time.
-- Use American English spelling. Use gender-neutral language.
-- Keep paragraphs short: one topic, and no more than six sentences.
-
-Hard constraints:
-- Keep the meaning. Never remove a fact, a number, a condition, or a warning. Never add information.
-- Keep every placeholder that looks like ⟦0⟧ exactly as written, once each. They stand for code, links, and URLs.
-- Keep technical terms, product names, and names of commands unchanged.
-- Keep Markdown emphasis (**bold**, *italic*) on the same words where possible.
-- Return one paragraph of plain text. Do not add a list marker, a heading, a quotation, or any commentary.
-- If a sentence is already correct, keep it unchanged.
-
-Return only the rewritten text inside <rewrite></rewrite> tags."""
 
 PLACEHOLDER_RE = re.compile(
     r"!\[[^\]]*\]\([^)]*\)"
@@ -985,104 +947,13 @@ def protect(text: str) -> tuple:
 
     def sub(m):
         store.append(m.group(0))
-        return f"\u27e6{len(store) - 1}\u27e7"
+        return f"⟦{len(store) - 1}⟧"
 
     return PLACEHOLDER_RE.sub(sub, text), store
 
 
 def unprotect(text: str, store: list) -> str:
-    return re.sub(r"\u27e6(\d+)\u27e7", lambda m: store[int(m.group(1))], text)
-
-
-def build_user_prompt(block: Block, ptext: str, findings: list, cfg: Config) -> str:
-    kind = {"list_item": "a list item" + (" in a numbered procedure" if block.ordered else ""), "paragraph": "a paragraph"}.get(block.kind, "a paragraph")
-    issues = "\n".join(f"- Rule {f.rule}: {f.message}" for f in findings)
-    extra = ""
-    if cfg.allow_words:
-        extra = "\nKeep these terms unchanged: " + ", ".join(sorted(cfg.allow_words)) + "."
-    if block.mode:
-        extra += f"\nTreat all sentences as {block.mode} writing."
-    return f"The text is {kind}. Problems found by an automatic checker:\n{issues}{extra}\n\n<original>\n{ptext}\n</original>"
-
-
-def call_anthropic(system: str, user: str, model: str, api_key: str, base_url: str, max_tokens: int = 1024) -> str:
-    body = json.dumps({"model": model, "max_tokens": max_tokens, "system": system,
-                       "messages": [{"role": "user", "content": user}]}).encode()
-    req = urllib.request.Request(base_url.rstrip("/") + "/v1/messages", data=body, method="POST", headers={
-        "content-type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"})
-    last = None
-    for attempt in range(4):
-        try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-                data = json.loads(r.read().decode())
-            return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:300]
-            last = f"HTTP {e.code}: {detail}"
-            if e.code not in (408, 409, 429, 500, 502, 503, 529):
-                break
-        except (urllib.error.URLError, TimeoutError) as e:
-            last = str(e)
-        time.sleep(2 ** attempt)
-    raise RuntimeError(f"API request failed: {last}")
-
-
-def call_command(cmd: str, system: str, user: str) -> str:
-    r = subprocess.run(shlex.split(cmd), input=system + "\n\n" + user, capture_output=True, text=True, timeout=300)
-    if r.returncode != 0:
-        raise RuntimeError(f"command failed ({r.returncode}): {r.stderr.strip()[:300]}")
-    return r.stdout
-
-
-def make_llm(args):
-    if args.cmd:
-        return lambda system, user: call_command(args.cmd, system, user)
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        raise SystemExit("ste: set ANTHROPIC_API_KEY, or use --cmd (for example --cmd 'claude -p').")
-    model = args.model or os.environ.get("STE_MODEL") or "claude-sonnet-5-5"
-    base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-    return lambda system, user: call_anthropic(system, user, model, key, base)
-
-
-def score(findings: list) -> int:
-    return sum(SEV_WEIGHT[f.severity] for f in findings)
-
-
-def rewrite_block(block: Block, findings: list, cfg: Config, dic, llm, min_sev: str = "warning") -> tuple:
-    """Return (new_text or None, reason). new_text is the block content without prefixes."""
-    findings = [f for f in findings if SEVERITIES[f.severity] >= SEVERITIES[min_sev]]
-    original = " ".join(t.strip() for _, _, t in block.lines)
-    if "\u27e6" in original:
-        return None, "contains reserved placeholder characters"
-    ptext, store = protect(original)
-    try:
-        reply = llm(SYSTEM_PROMPT, build_user_prompt(block, ptext, findings, cfg))
-    except Exception as e:  # network, process, timeout
-        return None, f"LLM call failed: {e}"
-    m = re.search(r"<rewrite>(.*?)</rewrite>", reply, re.S)
-    out = (m.group(1) if m else reply).strip()
-    out = re.sub(r"\s*\n\s*", " ", out)
-    if not out:
-        return None, "empty reply"
-    want = sorted(re.findall(r"\u27e6\d+\u27e7", ptext))
-    got = sorted(re.findall(r"\u27e6\d+\u27e7", out))
-    if want != got:
-        return None, "placeholders for code or links were changed"
-    new = unprotect(out, store)
-    if len(new) > 3 * len(original) + 200:
-        return None, "reply is much longer than the original"
-    if re.match(r"([-*+]|\d+[.)]|#{1,6}|>)\s", new) and not re.match(r"([-*+]|\d+[.)]|#{1,6}|>)\s", original):
-        return None, "reply added Markdown structure"
-    if new.strip() == original.strip():
-        return None, "unchanged"
-    probe = Block(block.kind, [(0, "", new)], block.ordered, block.mode, False)
-    after = [f for f in analyze_block(probe, cfg, dic) if SEVERITIES[f.severity] >= SEVERITIES[min_sev]]
-    errs_before = sum(f.severity == "error" for f in findings)
-    errs_after = sum(f.severity == "error" for f in after)
-    if errs_after > errs_before or score(after) >= score(findings):
-        return None, f"no improvement ({score(findings)} -> {score(after)})"
-    return new, f"{score(findings)} -> {score(after)}"
+    return re.sub(r"⟦(\d+)⟧", lambda m: store[int(m.group(1))], text)
 
 
 def place_block_text(block: Block, new: str, line_starts: list, text: str) -> tuple:
@@ -1105,36 +976,6 @@ def place_block_text(block: Block, new: str, line_starts: list, text: str) -> tu
         else:
             wrapped.append(piece)
     return start, end, (("\r\n" if crlf else "\n") + cont_prefix).join(wrapped)
-
-
-def rewrite_text(text: str, cfg: Config, dic, llm, min_sev: str, jobs: int, verbose: bool) -> tuple:
-    """Return (new_text, stats). Applies safe fixes first, then LLM rewrites for what remains."""
-    text, fixed = apply_safe_fixes(text, cfg, dic)
-    res, ls = lint_detailed(text, cfg, dic)
-    todo = []
-    for b, fs in res:
-        fs2 = [f for f in fs if SEVERITIES[f.severity] >= SEVERITIES[min_sev]]
-        if fs2:
-            todo.append((b, fs))   # give the model all findings for the block
-    stats = {"fixed": fixed, "candidates": len(todo), "rewritten": 0, "kept": 0, "reasons": []}
-
-    def work(item):
-        b, fs = item
-        return item, rewrite_block(b, fs, cfg, dic, llm, min_sev)
-
-    reps = []
-    with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
-        for (b, fs), (new, why) in ex.map(work, todo):
-            if new is None:
-                stats["kept"] += 1
-                stats["reasons"].append((b.lines[0][0] + 1, why))
-            else:
-                reps.append(place_block_text(b, new, ls, text))
-                stats["rewritten"] += 1
-                if verbose:
-                    stats["reasons"].append((b.lines[0][0] + 1, f"rewritten ({why})"))
-    new_text, _ = apply_replacements(text, reps)
-    return new_text, stats
 
 
 # --------------------------------------------------------------------------------------
@@ -1288,7 +1129,7 @@ def cmd_check(args) -> int:
         if hidden:
             print(f"{hidden} lower-severity finding(s) hidden. Use --min-severity info to show them.", file=sys.stderr)
         if dic is None and cfg.on("1.2"):
-            print("Tip: run 'ste dict build ASD-STE100_ISSUE9.pdf' to turn on the full dictionary check.", file=sys.stderr)
+            print("Tip: run 'ste dict build ASD-STE100_ISSUE9.txt' to turn on the full dictionary check.", file=sys.stderr)
     threshold = SEVERITIES[cfg.fail_on]
     return 1 if any(total[s] and SEVERITIES[s] >= threshold for s in total) else 0
 
@@ -1320,55 +1161,6 @@ def cmd_fix(args) -> int:
     return 0
 
 
-def cmd_rewrite(args) -> int:
-    cfg = apply_cli_config(args)
-    dic = None if args.no_dict else Dictionary.find(cfg.dictionary, cfg.root)
-    llm = make_llm(args)
-    changed = 0
-    for fp in iter_files(args.paths or ["."], cfg):
-        if not set_format(fp, args, cfg):
-            continue
-        old = read_text(fp)
-        if old is None:
-            continue
-        keep = lambda fs: [f for f in fs if SEVERITIES[f.severity] >= SEVERITIES[args.min_severity]]
-        before = len(keep(lint_text(old, cfg, dic)))
-        if before == 0:
-            continue
-        new, st = rewrite_text(old, cfg, dic, llm, args.min_severity, args.jobs, args.verbose)
-        after = len(keep(lint_text(new, cfg, dic)))
-        print(f"{fp.as_posix()}: {before} -> {after} finding(s); {st['fixed']} mechanical fix(es), "
-              f"{st['rewritten']} of {st['candidates']} paragraph(s) rewritten", file=sys.stderr)
-        for line, why in st["reasons"]:
-            if args.verbose or not why.startswith("rewritten"):
-                print(f"  line {line}: {why}", file=sys.stderr)
-        if new != old:
-            changed += 1
-            if args.write:
-                write_text(fp, new)
-            else:
-                show_diff(fp.as_posix(), old, new)
-    if not args.write and changed:
-        print(f"\nDry run: {changed} file(s) would change. Run again with --write to apply, and review the diff in git.", file=sys.stderr)
-    return 0
-
-
-def pick_llm(args):
-    """Choose a backend: --no-llm, --cmd, the Anthropic API, then Claude Code. Returns (llm, label)."""
-    if args.no_llm:
-        return None, "mechanical fixes only"
-    if args.cmd:
-        return (lambda system, user: call_command(args.cmd, system, user)), f"command: {args.cmd}"
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        model = args.model or os.environ.get("STE_MODEL") or "claude-sonnet-5-5"
-        base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-        return (lambda system, user: call_anthropic(system, user, model, key, base)), f"Anthropic API ({model})"
-    if shutil.which("claude"):
-        return (lambda system, user: call_command("claude -p", system, user)), "Claude Code (claude -p)"
-    return None, None
-
-
 def backup_path(p: Path) -> Path:
     b = p.with_name(p.name + ".bak")
     n = 1
@@ -1391,23 +1183,9 @@ def cmd_process(args) -> int:
     dic = None if args.no_dict else Dictionary.find(cfg.dictionary, cfg.root)
     keep = lambda fs: [f for f in fs if SEVERITIES[f.severity] >= SEVERITIES[args.min_severity]]
     before = len(keep(lint_text(text, cfg, dic)))
-    llm, label = pick_llm(args)
-    stats = None
-    if llm is None:
-        new, _ = apply_safe_fixes(text, cfg, dic)
-        if label is None:
-            print("ste: no LLM found, so only mechanical fixes were applied. To rewrite sentences, set ANTHROPIC_API_KEY, "
-                  "install Claude Code, or pass --cmd.", file=sys.stderr)
-    else:
-        print(f"Using {label}...", file=sys.stderr)
-        new, stats = rewrite_text(text, cfg, dic, llm, args.min_severity, args.jobs, args.verbose)
+    new, _ = apply_safe_fixes(text, cfg, dic)
     after = len(keep(lint_text(new, cfg, dic)))
-    detail = f"; {stats['rewritten']} of {stats['candidates']} paragraph(s) rewritten" if stats else ""
-    print(f"{src.as_posix()}: {before} -> {after} finding(s){detail}", file=sys.stderr)
-    if stats:
-        for line, why in stats["reasons"]:
-            if args.verbose or not why.startswith("rewritten"):
-                print(f"  line {line}: kept as is: {why}" if not why.startswith("rewritten") else f"  line {line}: {why}", file=sys.stderr)
+    print(f"{src.as_posix()}: {before} -> {after} finding(s) after mechanical fixes", file=sys.stderr)
     if args.dry_run:
         show_diff(src.as_posix(), text, new)
         return 0
@@ -1432,8 +1210,8 @@ def cmd_process(args) -> int:
 def cmd_dict(args) -> int:
     if args.action == "build":
         if not args.pdf:
-            raise SystemExit("ste: give the path to your copy of the standard: ste dict build ASD-STE100_ISSUE9.pdf")
-        data = build_dictionary_from_pdf(args.pdf)
+            raise SystemExit("ste: give the text of your copy of the standard: ste dict build ASD-STE100_ISSUE9.txt")
+        data = build_dictionary_from_file(args.pdf)
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -1442,7 +1220,7 @@ def cmd_dict(args) -> int:
         return 0
     cfg = load_config()
     d = Dictionary.find(cfg.dictionary, cfg.root)
-    print("No dictionary found. Run: ste dict build ASD-STE100_ISSUE9.pdf" if d is None
+    print("No dictionary found. Run: ste dict build ASD-STE100_ISSUE9.txt" if d is None
           else f"Dictionary loaded: {len(d.forms) + len(d.phrases)} non-approved forms, {len(d.approved)} approved words.")
     return 0
 
@@ -1457,7 +1235,7 @@ def cmd_rules(_args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="ste", description="Check and rewrite Markdown toward ASD-STE100 Simplified Technical English.")
+    p = argparse.ArgumentParser(prog="ste", description="Check and fix Markdown toward ASD-STE100 Simplified Technical English. Offline: no network, no LLM.")
     p.add_argument("--version", action="version", version=f"ste {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -1483,16 +1261,7 @@ def build_parser() -> argparse.ArgumentParser:
     common(f, writes=True)
     f.set_defaults(func=cmd_fix)
 
-    r = sub.add_parser("rewrite", help="Fix, then rewrite problem paragraphs with an LLM")
-    common(r, writes=True)
-    r.add_argument("--cmd", help="Command that reads a prompt on stdin and prints the reply, for example 'claude -p'")
-    r.add_argument("--model", help="Model for the Anthropic API (default: claude-sonnet-5-5, or $STE_MODEL)")
-    r.add_argument("--min-severity", choices=list(SEVERITIES), default="warning", help="Rewrite blocks that have at least one finding of this level")
-    r.add_argument("--jobs", type=int, default=4, help="Parallel requests (default 4)")
-    r.add_argument("-v", "--verbose", action="store_true")
-    r.set_defaults(func=cmd_rewrite)
-
-    pr = sub.add_parser("process", help="Fix and rewrite one file. Writes updated-NAME unless you name an output")
+    pr = sub.add_parser("process", help="Apply the safe mechanical fixes to one file. Writes updated-NAME unless you name an output")
     pr.add_argument("input", help="Markdown (.md) or plain text (.txt) file to process")
     pr.add_argument("output", nargs="?", help="Write the result here (default: updated-NAME next to the input)")
     pr.add_argument("--in-place", action="store_true", help="Update the input file instead (a .bak copy is kept)")
@@ -1502,11 +1271,8 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--max-procedural", type=int)
     pr.add_argument("--max-descriptive", type=int)
     pr.add_argument("--no-dict", action="store_true", help="Ignore the dictionary file")
-    pr.add_argument("--no-llm", action="store_true", help="Apply mechanical fixes only")
-    pr.add_argument("--cmd", help="Use this command as the LLM, for example 'claude -p'")
-    pr.add_argument("--model", help="Model for the Anthropic API (default: claude-sonnet-5-5, or $STE_MODEL)")
+    pr.add_argument("--no-llm", action="store_true", help=argparse.SUPPRESS)   # accepted and ignored: this tool never calls an LLM
     pr.add_argument("--min-severity", choices=list(SEVERITIES), default="warning")
-    pr.add_argument("--jobs", type=int, default=4)
     pr.add_argument("--dry-run", action="store_true", help="Show a diff and write nothing")
     pr.add_argument("--no-backup", action="store_true", help="With --in-place, do not keep a .bak copy")
     pr.add_argument("--force", action="store_true", help="Replace the output file if it exists")
@@ -1515,7 +1281,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("dict", help="Build or inspect the local dictionary")
     d.add_argument("action", choices=["build", "info"])
-    d.add_argument("pdf", nargs="?", help="Path to ASD-STE100_ISSUE9.pdf (or a .txt made with pdftotext -layout)")
+    d.add_argument("pdf", nargs="?", help="Path to ASD-STE100_ISSUE9.txt (make it with: pdftotext -layout ASD-STE100_ISSUE9.pdf ASD-STE100_ISSUE9.txt)")
     d.add_argument("--out", default=".ste/dictionary.json")
     d.set_defaults(func=cmd_dict)
 

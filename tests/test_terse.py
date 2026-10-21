@@ -60,14 +60,13 @@ class Validate(unittest.TestCase):
         self.assertEqual(v("Set \u27e60\u27e7 now please.", "Set now."), "placeholders for code or links were changed")
         self.assertEqual(v("Set the MAX_SIZE value to the limit.", "Set max size to limit."), "an identifier was changed")
         self.assertEqual(v("Set it.", "Set it. And more words."), "not shorter")
-        self.assertEqual(v("You can run it now and then stop it.", "Ugh, run it."), "reply role-plays")
         self.assertEqual(v("You can run it now and then stop it.", "- Run it."), "reply added Markdown structure")
         self.assertEqual(v("You can run it now and then stop it.", ""), "empty reply")
 
 
 class Files(unittest.TestCase):
-    def go(self, text, level="full", llm=None, include=False, min_words=6):
-        return terse.terse_text(text, level, llm, include, min_words, 1, False)
+    def go(self, text, level="full", include=False, min_words=6):
+        return terse.terse_text(text, level, include, min_words, False)
 
     def test_only_prose_changes(self):
         md = "\n".join([
@@ -104,23 +103,6 @@ class Files(unittest.TestCase):
         once, _ = self.go(md)
         twice, _ = self.go(once)
         self.assertEqual(once, twice)
-
-    def test_llm_batches_and_validation(self):
-        md = "The tool really never deletes the files in the project directory.\n\nWe wait for 30 seconds before the retry happens again here.\n\nThird paragraph is also really long enough to be shortened.\n"
-        calls = []
-
-        def llm(system, user):
-            calls.append(user)
-            ids = re.findall(r'<b id="(\d+)">', user)
-            return ('<b id="0">Tool never deletes files in project directory.</b>\n'
-                    '<b id="1">Wait before retry.</b>\n')          # id 1 drops a number, id 2 missing
-
-        new, st = self.go(md, llm=llm)
-        self.assertEqual(len(calls), 1)                                       # one batch for three blocks
-        self.assertIn("Tool never deletes files in project directory.", new)
-        self.assertIn("We wait for 30 seconds", new)                          # rejected: number dropped
-        self.assertIn("Third paragraph is also really long", new)             # rejected: no reply
-        self.assertEqual(st["changed"], 1)
 
 
 class Cli(unittest.TestCase):

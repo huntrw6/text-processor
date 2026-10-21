@@ -108,25 +108,16 @@ class Process(unittest.TestCase):
             self.assertFalse((Path(d) / "updated-tool.py").exists())
             self.assertEqual(py.read_text(encoding="utf-8").count("\n"), 3)                  # untouched
 
-    def test_one_llm_serves_both_passes(self):
-        fake = (
-            "import re, sys\n"
-            "data = sys.stdin.read()\n"
-            "if '<blocks>' in data:\n"
-            "    out = ''.join(f'<b id=\"{i}\">{t.replace(\"really \", \"\")}</b>' for i, t in re.findall(r'<b id=\"(\\d+)\">(.*?)</b>', data, re.S))\n"
-            "    print(out)\n"
-            "else:\n"
-            "    print('<rewrite>The tool really stores the data in the cache for the user.</rewrite>')\n")
+    def test_llm_flags_are_gone(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "fake.py").write_text(fake, encoding="utf-8")
-            src, out = Path(d) / "t.md", Path(d) / "o.md"
-            src.write_text("The data was stored by the tool in the cache for the user, and it was really fast.\n", encoding="utf-8")
-            rc, _, err = self.run_cli(str(src), str(out), "-technical", "-caveman", "--cmd", f"{sys.executable} {Path(d) / 'fake.py'}")
-            self.assertEqual(rc, 0, err)
-            self.assertEqual(out.read_text(encoding="utf-8"), "The tool stores the data in the cache for the user.\n")
-            self.assertIn("technical:", err)
-            self.assertIn("1 of 1 paragraph(s) rewritten", err)
-            self.assertIn("caveman: prose", err)
+            src = Path(d) / "t.md"
+            src.write_text(SRC, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    proc.main([str(src), "--cmd", "claude -p"])
+            with self.assertRaises(SystemExit):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    proc.main([str(src), "--model", "x"])
 
 
 class Menus(unittest.TestCase):
@@ -146,8 +137,9 @@ class Menus(unittest.TestCase):
             desk = home / ".local/share/kio/servicemenus/process.desktop"
             self.assertTrue(os.access(desk, os.X_OK))
             self.assertIn("Actions=process-technical;process-caveman;process-both;", desk.read_text())
-            self.assertTrue((home / ".config/process/env").exists())
-            self.assertEqual((home / ".config/process/env").stat().st_mode & 0o777, 0o600)
+            self.assertFalse((home / ".config/process").exists())                # no env file: nothing reads secrets
+            for q in naut.iterdir():
+                self.assertNotIn("config/process/env", q.read_text())
 
             # run a generated script the way a file manager does (path with spaces, a non-Markdown file)
             docs = Path(d) / "my docs"
@@ -156,8 +148,12 @@ class Menus(unittest.TestCase):
             md.write_text(SRC, encoding="utf-8")
             txt.write_text("Don't stop.\n", encoding="utf-8")
             py.write_text("# Don't\n", encoding="utf-8")
-            env = {**os.environ, "HOME": str(home), "PATH": "/usr/bin:/bin", "ANTHROPIC_API_KEY": ""}
-            env.pop("ANTHROPIC_API_KEY")
+            # a stub notify-send (found first through ~/.local/bin) makes the output the same on every host
+            stub = home / ".local" / "bin" / "notify-send"
+            stub.parent.mkdir(parents=True, exist_ok=True)
+            stub.write_text('#!/bin/sh\necho "$3: $4"\n', encoding="utf-8")
+            stub.chmod(0o755)
+            env = {**os.environ, "HOME": str(home), "PATH": "/usr/bin:/bin"}
             r = subprocess.run([str(naut / "Process - technical"), str(md), str(txt), str(py)], env=env, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(md.read_text(encoding="utf-8"), SRC)                                   # original untouched
@@ -170,7 +166,7 @@ class Menus(unittest.TestCase):
                 proc.uninstall_scripts(home=home)
             self.assertEqual(list(naut.iterdir()), [])
             self.assertFalse(desk.exists())
-            self.assertTrue((home / ".config/process/env").exists())      # settings are kept
+            self.assertFalse((home / ".config/process").exists())
 
     def test_install_needs_a_target_when_no_file_manager_is_found(self):
         with tempfile.TemporaryDirectory() as d:

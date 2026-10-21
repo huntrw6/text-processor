@@ -14,7 +14,6 @@ and it leaves safety text alone. Needs ste.py in the same folder.
 from __future__ import annotations
 
 import argparse
-import concurrent.futures as cf
 import os
 import re
 import sys
@@ -31,10 +30,10 @@ LEVELS = ("lite", "full", "ultra")
 # --------------------------------------------------------------------------------------
 
 _EXTRA = (
-    r'"[^"\n]{1,200}"|\u201c[^\u201d\n]{1,200}\u201d'                       # quoted text
+    r'"[^"\n]{1,200}"|“[^”\n]{1,200}”'                       # quoted text
     r"|(?<![\w/])--?[A-Za-z][\w-]*"                                          # command-line flags
     r"|[\w.~-]*(?:/[\w.~-]+)+/?"                                             # paths
-    r"|\b[\w-]+\.(?:md|py|js|ts|tsx|jsx|json|toml|ya?ml|sh|txt|html|css|go|rs|rb|java|cpp|sql|env|lock|cfg|ini)\b"  # file names
+    r"|\b[\w-]+\.(?:md|py|js|ts|tsx|jsx|json|toml|ya?ml|sh|txt|html|css|go|rs|rb|java|cpp|sql|lock|cfg|ini|env)\b"  # file names
     r"|\bv?\d+(?:\.\d+)+\b"                                                  # version numbers
     r"|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b"                                        # CONSTANTS and env vars
 )
@@ -51,7 +50,7 @@ def protect(text: str):
 
     def sub(m):
         store.append(m.group(0))
-        return f"\u27e6{len(store) - 1}\u27e7"
+        return f"⟦{len(store) - 1}⟧"
 
     return PROTECT_RE.sub(sub, text), store
 
@@ -104,8 +103,8 @@ WORDY = {
 }
 WORDY_RE = re.compile(r"\b(" + "|".join(sorted((re.escape(k) for k in WORDY), key=len, reverse=True)) + r")\b", re.I)
 
-ARTICLE_MID = re.compile(r"(?<![\w'\u2019./-])(?:the|an|a)\s+(?=[A-Za-z\u27e6])")
-ARTICLE_START = re.compile(r"(?<![\w'\u2019./-])(?:The|An|A)\s+(?=[A-Za-z\u27e6])")
+ARTICLE_MID = re.compile(r"(?<![\w'’./-])(?:the|an|a)\s+(?=[A-Za-z⟦])")
+ARTICLE_START = re.compile(r"(?<![\w'’./-])(?:The|An|A)\s+(?=[A-Za-z⟦])")
 
 ABBREV = {
     "configuration": "config", "configurations": "configs", "database": "DB", "databases": "DBs",
@@ -145,50 +144,14 @@ def det_compress(ptext: str, level: str) -> str:
     return s
 
 
-# --------------------------------------------------------------------------------------
-# LLM compression
-# --------------------------------------------------------------------------------------
-
-LEVEL_TEXT = {
-    "lite": "Remove filler, hedging that carries no information, pleasantries, and wordy phrases. Keep articles (a, an, the) and keep full sentences.",
-    "full": "Also drop articles (a, an, the). Sentence fragments are fine. Prefer short words (use, not utilize).",
-    "ultra": "Maximum compression. Use common abbreviations (DB, config, env, auth, repo, dir, docs, info, app), "
-             "arrows for cause and flow (A -> B), and = for equivalence. Drop conjunctions when the meaning stays clear.",
-}
-
-SYSTEM_PROMPT = """You shorten technical documentation prose so that it uses fewer tokens and keeps every fact.
-The style is terse, direct, and plain. This is documentation: do not role-play, do not write "me" or "ugh", no jokes.
-
-Intensity: {level_text}
-
-Always:
-- Drop filler (just, really, basically, actually, simply), pleasantries (sure, certainly, of course, happy to), and empty hedging.
-- Keep every fact, number, name, condition, and exception. Keep negations (not, never, no, cannot) exactly.
-- Keep words that set order or limits: must, must not, never, only, unless, before, after, then, first, finally.
-- Keep every placeholder that looks like ⟦0⟧ exactly as written, once each. They stand for code, links, paths, and flags.
-- Keep identifiers, product names, commands, and the capitalization of names.
-- Keep Markdown emphasis (**bold**, *italic*) on the same words where possible.
-- If shortening would make the meaning, or the order of steps, unclear, keep the original sentence.
-- Do not merge, split, or reorder blocks.
-
-Reply with one element for each input block, using the same ids, and nothing else:
-<b id="1">shortened text</b>"""
-
-
-def build_prompt(level: str, batch: list) -> str:
-    body = "\n".join(f'<b id="{i}">{t}</b>' for i, t in batch)
-    return f"<blocks>\n{body}\n</blocks>"
-
-
-NEG_RE = re.compile(r"\b(?:not|no|never|none|cannot|can't|don't|doesn't|won't|without|nothing|neither|nor|disable[ds]?)\b|n't\b|\u2260", re.I)
+NEG_RE = re.compile(r"\b(?:not|no|never|none|cannot|can't|don't|doesn't|won't|without|nothing|neither|nor|disable[ds]?)\b|n't\b|≠", re.I)
 IDENT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]*")
-ROLEPLAY_RE = re.compile(r"\b(?:ugh|ooga|booga|caveman)\b|\bme (?:think|know|say)\b", re.I)
 NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
 
 
 def _identifiers(text: str) -> set:
     out = set()
-    for tok in IDENT_RE.findall(re.sub(r"\u27e6\d+\u27e7", " ", text)):
+    for tok in IDENT_RE.findall(re.sub(r"⟦\d+⟧", " ", text)):
         tok = tok.strip(".:-")
         if len(tok) >= 2 and (any(c.isdigit() for c in tok) or "_" in tok or re.search(r"[a-z][A-Z]", tok)):
             out.add(tok)
@@ -199,9 +162,9 @@ def validate(orig: str, new: str, require_shorter: bool = True) -> Optional[str]
     """Return a reason to reject `new`, or None."""
     if not new:
         return "empty reply"
-    if sorted(re.findall(r"\u27e6\d+\u27e7", orig)) != sorted(re.findall(r"\u27e6\d+\u27e7", new)):
+    if sorted(re.findall(r"⟦\d+⟧", orig)) != sorted(re.findall(r"⟦\d+⟧", new)):
         return "placeholders for code or links were changed"
-    o_plain, n_plain = re.sub(r"\u27e6\d+\u27e7", " ", orig), re.sub(r"\u27e6\d+\u27e7", " ", new)
+    o_plain, n_plain = re.sub(r"⟦\d+⟧", " ", orig), re.sub(r"⟦\d+⟧", " ", new)
     if require_shorter and ste.count_words(new) >= ste.count_words(orig):
         return "not shorter"
     if any(n not in n_plain for n in NUM_RE.findall(o_plain)):
@@ -210,8 +173,6 @@ def validate(orig: str, new: str, require_shorter: bool = True) -> Optional[str]
         return "a negation was dropped"
     if any(i not in new for i in _identifiers(orig)):
         return "an identifier was changed"
-    if ROLEPLAY_RE.search(new) and not ROLEPLAY_RE.search(orig):
-        return "reply role-plays"
     if re.match(r"([-*+]|\d+[.)]|#{1,6}|>)\s", new) and not re.match(r"([-*+]|\d+[.)]|#{1,6}|>)\s", orig):
         return "reply added Markdown structure"
     if "\n" in new:
@@ -228,7 +189,7 @@ def est_tokens(text: str) -> int:
     return (len(text) + 3) // 4
 
 
-def terse_text(text: str, level: str, llm, include_warnings: bool, min_words: int, jobs: int, verbose: bool, plain: bool = False):
+def terse_text(text: str, level: str, include_warnings: bool, min_words: int, verbose: bool, plain: bool = False):
     """Return (new_text, stats)."""
     ls = ste.line_starts_of(text)
     cands = []        # (block, original string, protected string, store)
@@ -241,7 +202,7 @@ def terse_text(text: str, level: str, llm, include_warnings: bool, min_words: in
         if words < min_words:
             continue
         line = b.lines[0][0] + 1
-        if "\u27e6" in original:
+        if "⟦" in original:
             stats["kept"].append((line, "contains reserved placeholder characters"))
             continue
         if not include_warnings and SAFETY_RE.search(original):
@@ -252,40 +213,9 @@ def terse_text(text: str, level: str, llm, include_warnings: bool, min_words: in
     stats["blocks"] = len(cands)
 
     results: dict = {}   # index -> (new protected text or None, reason)
-    if llm is None:
-        for i, (_, _, ptext, _) in enumerate(cands):
-            new = det_compress(ptext, level)
-            results[i] = (new, None) if new != ptext else (None, "nothing to shorten")
-    else:
-        batches, cur, size = [], [], 0
-        for i, (_, _, ptext, _) in enumerate(cands):
-            if cur and (len(cur) >= 12 or size + len(ptext) > 6000):
-                batches.append(cur)
-                cur, size = [], 0
-            cur.append((i, ptext))
-            size += len(ptext)
-        if cur:
-            batches.append(cur)
-        system = SYSTEM_PROMPT.format(level_text=LEVEL_TEXT[level])
-
-        def run(batch):
-            try:
-                reply = llm(system, build_prompt(level, batch))
-            except Exception as e:
-                return batch, None, f"LLM call failed: {e}"
-            got = {int(i): re.sub(r"\s*\n\s*", " ", t.strip()) for i, t in re.findall(r'<b id="(\d+)">(.*?)</b>', reply, re.S)}
-            return batch, got, None
-
-        with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
-            for batch, got, err in ex.map(run, batches):
-                for i, ptext in batch:
-                    if got is None:
-                        results[i] = (None, err)
-                    elif i not in got:
-                        results[i] = (None, "no reply for this block")
-                    else:
-                        why = validate(ptext, got[i])
-                        results[i] = (None, why) if why else (got[i], None)
+    for i, (_, _, ptext, _) in enumerate(cands):
+        new = det_compress(ptext, level)
+        results[i] = (new, None) if new != ptext else (None, "nothing to shorten")
 
     reps = []
     for i, (b, original, ptext, store) in enumerate(cands):
@@ -328,14 +258,8 @@ def run(args) -> int:
     if level not in LEVELS:
         print(f"terse: level must be one of {', '.join(LEVELS)} (got '{level}')", file=sys.stderr)
         return 2
-    llm, label = ste.pick_llm(args)
-    if llm is None:
-        if label is None:
-            print("terse: no LLM found, so only word-level shortening was applied. For better results, set ANTHROPIC_API_KEY, "
-                  "install Claude Code, or pass --cmd.", file=sys.stderr)
-        label = "built-in rules (no LLM)"
-    print(f"{src.as_posix()}: level {level}, using {label}", file=sys.stderr)
-    new, st = terse_text(text, level, llm, args.include_warnings, args.min_words, args.jobs, args.verbose, plain=(fmt == "text"))
+    print(f"{src.as_posix()}: level {level}", file=sys.stderr)
+    new, st = terse_text(text, level, args.include_warnings, args.min_words, args.verbose, plain=(fmt == "text"))
 
     wb, wa = st["words_before"], st["words_after"]
     pct = f" ({(wa - wb) * 100 // wb:+d}%)" if wb else ""
@@ -373,12 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--in-place", action="store_true", help="Update the input file instead (a .bak copy is kept)")
     p.add_argument("--as", dest="as_format", choices=["markdown", "text"], help="Treat the file as this format whatever its extension")
     p.add_argument("--level", choices=LEVELS, help="lite: no filler, keep articles. full: also drop articles (default, or $TERSE_LEVEL). ultra: abbreviations and arrows.")
-    p.add_argument("--no-llm", action="store_true", help="Use the built-in word rules only")
-    p.add_argument("--cmd", help="Use this command as the LLM, for example 'claude -p'")
-    p.add_argument("--model", help="Model for the Anthropic API (default: claude-sonnet-5-5, or $STE_MODEL)")
+    p.add_argument("--no-llm", action="store_true", help=argparse.SUPPRESS)   # accepted and ignored: this tool never calls an LLM
     p.add_argument("--include-warnings", action="store_true", help="Also shorten paragraphs that contain safety words (warning, irreversible, ...)")
     p.add_argument("--min-words", type=int, default=6, help="Skip paragraphs shorter than this (default 6)")
-    p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--dry-run", action="store_true", help="Show a diff and write nothing")
     p.add_argument("--no-backup", action="store_true", help="With --in-place, do not keep a .bak copy")
     p.add_argument("--force", action="store_true", help="Replace the output file if it exists")

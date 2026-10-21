@@ -1,6 +1,8 @@
 # process-text
 
-Rewrite a Markdown or text file. Use `-technical` for ASD-STE100 English. Use `-caveman` for fewer tokens.
+Shorten or simplify a Markdown or text file. Use `-technical` for ASD-STE100 English. Use `-caveman` for fewer tokens.
+
+The tool is offline. It makes no network calls, starts no other programs, and never uses an LLM or an API key. It applies fixed rules and leaves sentence-level rewriting to you, or to the agent that runs it.
 
 Use Python 3.9 or newer. The tool accepts `.md` and `.txt` files only.
 
@@ -22,14 +24,14 @@ process FILE OUTPUT -caveman
 process FILE -caveman --level lite
 process FILE -caveman --in-place
 process FILE -technical --dry-run
-process FILE -technical --no-llm
+process FILE -technical --dry-run
 ```
 
 The result is `updated-FILE`. `FILE` does not change.
 
 - `--level` accepts `lite`, `full` (default), and `ultra`.
 - `--in-place` replaces `FILE` and saves a copy as `FILE.bak`.
-- `--no-llm` uses the built-in rules only. Without it, the tool uses `ANTHROPIC_API_KEY` or `claude -p`.
+- The tool always uses the built-in rules only. The old `--no-llm` flag is accepted and does nothing.
 
 ## Right-click menu
 

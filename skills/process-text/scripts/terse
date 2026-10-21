@@ -8,10 +8,11 @@
 
     terse --install               put this command in ~/.local/bin so you can run it anywhere
 
-Other options: --no-llm, --cmd 'claude -p', --model NAME, --include-warnings, --no-backup, --force, -v.
+Other options: --include-warnings, --no-backup, --force, -v.
 Run 'terse --help' for the full list. This file needs terse.py and ste.py next to it.
 """
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -51,9 +52,8 @@ def install(name: str) -> int:
         print(f"Could not create {link}: {e}\nRun it as: python {target} text.md", file=sys.stderr)
         return 1
     print(f"Installed: {link} -> {target}")
-    if str(dest) not in os.environ.get("PATH", "").split(os.pathsep):
-        print(f'\n{dest} is not on your PATH. Add this line to ~/.zshrc or ~/.bashrc, then open a new terminal:\n'
-              f'  export PATH="$HOME/.local/bin:$PATH"')
+    if shutil.which(name) is None:
+        print(f"\n{dest} is not on your PATH yet. Add {dest} to PATH in your shell settings, then open a new terminal.")
     print(f"\nTry: {name} --help")
     return 0
 
