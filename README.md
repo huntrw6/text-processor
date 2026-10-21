@@ -42,7 +42,7 @@ This works in Nautilus and Dolphin.
 ## Hermes
 
 ```sh
-hermes skills install OWNER/REPO/skills/process-text
+hermes skills install huntrw6/text-processor/skills/process-text
 ```
 
 Enter `/process-text FILE -caveman` in Hermes.
