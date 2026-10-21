@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""process - rewrite a Markdown file with one of two passes, or both.
+
+    process text.md -technical            ASD-STE100 Simplified Technical English (the default)
+    process text.md -caveman              fewer tokens (--level lite | full | ultra)
+    process text.md -technical -caveman   technical first, then a light shrink
+
+    process text.md -caveman new-text.md  write new-text.md and leave text.md unchanged
+    process text.md -technical --dry-run  show what would change
+
+    process --install                     put this command in ~/.local/bin so you can run it anywhere
+    process --install-scripts             add right-click menu items (Nautilus Scripts / Dolphin service menu)
+    process --uninstall-scripts           remove them again
+
+Updating in place keeps the original as text.md.bak. Other options: --no-llm, --cmd 'claude -p', --model NAME,
+--no-backup, --force, -v. Run 'process --help' for the full list. This file needs proc.py, terse.py, and ste.py next to it.
+"""
+import os
+import sys
+from pathlib import Path
+
+HERE = Path(os.path.realpath(__file__)).parent
+sys.path.insert(0, str(HERE))
+
+REQUIRED = ('proc.py', 'terse.py', 'ste.py')
+
+
+def check_files() -> bool:
+    """All the files must sit in the same folder. Say which one is missing, instead of a Python traceback."""
+    missing = [f for f in REQUIRED if not (HERE / f).is_file()]
+    if not missing:
+        return True
+    print(f"process: missing file(s) in {HERE}: {', '.join(missing)}", file=sys.stderr)
+    print(f"  process needs all of these in one folder: process, {', '.join(REQUIRED)}", file=sys.stderr)
+    near = sorted(p.name for p in HERE.glob("*.py"))
+    print(f"  Found there now: {', '.join(near) if near else 'no .py files'}", file=sys.stderr)
+    print("  If a download was renamed (for example 'ste (1).py'), rename it to the exact name above.", file=sys.stderr)
+    return False
+
+
+def install(name: str) -> int:
+    if not check_files():
+        return 1
+    dest = Path.home() / ".local" / "bin"
+    dest.mkdir(parents=True, exist_ok=True)
+    target = Path(os.path.realpath(__file__))
+    for f in (target, HERE / "proc.py", HERE / "terse.py", HERE / "ste.py"):
+        if f.exists():
+            os.chmod(f, os.stat(f).st_mode | 0o111)
+    link = dest / name
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    try:
+        link.symlink_to(target)
+    except OSError as e:   # for example Windows without symlink rights
+        print(f"Could not create {link}: {e}\nRun it as: python {target} text.md -technical", file=sys.stderr)
+        return 1
+    print(f"Installed: {link} -> {target}")
+    if str(dest) not in os.environ.get("PATH", "").split(os.pathsep):
+        print(f'\n{dest} is not on your PATH. Add this line to ~/.zshrc or ~/.bashrc, then open a new terminal:\n'
+              f'  export PATH="$HOME/.local/bin:$PATH"')
+    print(f"\nTry: {name} --help")
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["--install"]:
+        sys.exit(install(sys.argv[2] if len(sys.argv) > 2 else "process"))
+    if sys.argv[1:2] in (["--install-scripts"], ["--uninstall-scripts"]):
+        if not check_files():
+            sys.exit(1)
+        import proc
+        sys.exit(proc.manage_scripts(sys.argv[1], sys.argv[2:]))
+    if len(sys.argv) == 1:
+        print(__doc__)
+        sys.exit(2)
+    if not check_files():
+        sys.exit(1)
+    import proc
+    sys.exit(proc.main(sys.argv[1:]))

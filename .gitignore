@@ -1,0 +1,12 @@
+# Built from your own copy of ASD-STE100. ASD owns the copyright, so do not publish it.
+.ste/
+ASD-STE100*.pdf
+ASD-STE100*.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# Backups made by --in-place
+*.bak
+*.bak[0-9]*

@@ -1,0 +1,19 @@
+# Copy to .ste.toml in your project root. Every key is optional.
+[ste]
+max_procedural = 20            # Rule 5.1, words in an instruction
+max_descriptive = 25           # Rule 6.3, words in descriptive text
+max_paragraph_sentences = 6    # Rule 6.6
+
+# Turn rules off by id ("3.5") or by section ("3" turns off 3.2, 3.5, 3.6).
+disable = []
+
+# Technical terms that you use on purpose. They skip the -ing, vocabulary,
+# and spelling checks (Rules 1.5, 1.6, 1.12).
+allow_words = ["webhook", "idempotent", "logging", "caching", "routing"]
+
+# Names of people, products, and organizations. Each name counts as one word (Rule 8.6.7).
+names = ["Acme Cloud Platform", "GitHub Actions"]
+
+exclude = ["CHANGELOG.md", "docs/vendor/*"]
+fail_on = "error"              # exit code 1 at this severity or higher: info, warning, error
+dictionary = ".ste/dictionary.json"
